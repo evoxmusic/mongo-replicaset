@@ -13,11 +13,17 @@ RUN if [ -z "$MONGODB_USER" ] || [ -z "$MONGODB_PASSWORD" ]; then \
 # Create directory for mongodb data and scripts
 RUN mkdir -p /data/db /docker-entrypoint-initdb.d
 
+# Generate keyfile for replica set authentication
+RUN mkdir -p /data/mongodb && \
+    openssl rand -base64 756 > /data/mongodb/keyfile && \
+    chown mongodb:mongodb /data/mongodb/keyfile && \
+    chmod 400 /data/mongodb/keyfile
+
 # Create init script for replica set and root user
 RUN cat <<EOF > /docker-entrypoint-initdb.d/init-replica.sh
 #!/bin/bash
 # Start MongoDB without auth for initial setup
-mongod --replSet rs0 --bind_ip_all &
+mongod --replSet rs0 --bind_ip_all --keyFile /data/mongodb/keyfile &
 
 # Wait for MongoDB to start
 sleep 5
@@ -41,8 +47,8 @@ EOF
 # Create a custom entrypoint script
 RUN cat <<EOF > /custom-entrypoint.sh
 #!/bin/bash
-# Start MongoDB with authentication
-mongod --replSet rs0 --auth --bind_ip_all
+# Start MongoDB with authentication and keyfile
+exec mongod --replSet rs0 --auth --bind_ip_all --keyFile /data/mongodb/keyfile
 EOF
 
 # Make scripts executable
