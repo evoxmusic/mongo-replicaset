@@ -19,24 +19,54 @@ RUN mkdir -p /data/mongodb && \
     chown mongodb:mongodb /data/mongodb/keyfile && \
     chmod 400 /data/mongodb/keyfile
 
-# Create init script for replica set and root user
-RUN cat <<EOF > /docker-entrypoint-initdb.d/init-mongo.js
-admin = db.getSiblingDB("admin");
-admin.createUser({
-  user: "$MONGODB_USER",
-  pwd: "$MONGODB_PASSWORD",
-  roles: ["root"]
-});
-EOF
-
-RUN cat <<EOF > /docker-entrypoint-initdb.d/init-replica.sh
+# Create initialization script
+RUN cat <<'EOF' > /docker-entrypoint-initdb.d/init.sh
 #!/bin/bash
-sleep 10
-mongosh --eval "rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:27017' }]})"
+set -e
+
+# Start MongoDB without authentication for initial setup
+mongod --replSet rs0 --bind_ip_all --fork --logpath /var/log/mongodb.log
+
+# Wait for MongoDB to start
+until mongosh --eval "print('waiting...')" 2>/dev/null; do
+  sleep 1
+done
+
+echo "MongoDB started"
+
+# Initialize replica set
+mongosh --eval "rs.initiate({
+  _id: 'rs0',
+  members: [{ _id: 0, host: 'localhost:27017' }]
+})"
+
+# Wait for replica set to initialize
+sleep 5
+
+# Create root user
+mongosh --eval "admin = db.getSiblingDB('admin');
+  admin.createUser({
+    user: '$MONGODB_USER',
+    pwd: '$MONGODB_PASSWORD',
+    roles: ['root']
+  });"
+
+# Stop MongoDB
+mongosh admin --eval "db.shutdownServer()"
+
+# Wait for MongoDB to stop
+while ps aux | grep -v grep | grep mongod > /dev/null; do
+  sleep 1
+done
+
+echo "MongoDB stopped, ready for restart with authentication"
+
+# Start MongoDB with authentication
+exec mongod --replSet rs0 --auth --keyFile /data/mongodb/keyfile --bind_ip_all
 EOF
 
-# Make scripts executable
-RUN chmod +x /docker-entrypoint-initdb.d/init-replica.sh
+# Make script executable
+RUN chmod +x /docker-entrypoint-initdb.d/init.sh
 
 # Set proper permissions
 RUN chown -R mongodb:mongodb /data/db /docker-entrypoint-initdb.d /data/mongodb
@@ -44,5 +74,5 @@ RUN chown -R mongodb:mongodb /data/db /docker-entrypoint-initdb.d /data/mongodb
 # Expose the default MongoDB port
 EXPOSE 27017
 
-# Use the official MongoDB entrypoint
-CMD ["mongod", "--replSet", "rs0", "--auth", "--keyFile", "/data/mongodb/keyfile", "--bind_ip_all"]
+# Set the entrypoint
+ENTRYPOINT ["/docker-entrypoint-initdb.d/init.sh"]
