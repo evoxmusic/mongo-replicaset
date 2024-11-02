@@ -34,25 +34,33 @@ done
 
 echo "MongoDB started"
 
-# Initialize replica set
-mongosh --eval "rs.initiate({
-  _id: 'rs0',
-  members: [{ _id: 0, host: 'localhost:27017' }]
-})"
+# Initialize replica set if not already initialized
+mongosh --eval '
+if (rs.status().ok !== 1) {
+  rs.initiate({
+    _id: "rs0",
+    members: [{ _id: 0, host: "localhost:27017" }]
+  });
+}'
 
 # Wait for replica set to initialize
 sleep 5
 
-# Create root user
-mongosh --eval "admin = db.getSiblingDB('admin');
+# Create root user if it doesn't exist
+mongosh --eval '
+admin = db.getSiblingDB("admin");
+if (!admin.getUser("'$MONGODB_USER'")) {
   admin.createUser({
-    user: '$MONGODB_USER',
-    pwd: '$MONGODB_PASSWORD',
-    roles: ['root']
-  });"
+    user: "'$MONGODB_USER'",
+    pwd: "'$MONGODB_PASSWORD'",
+    roles: ["root"]
+  });
+} else {
+  print("User already exists, skipping user creation");
+}'
 
 # Stop MongoDB
-mongosh admin --eval "db.shutdownServer()"
+mongosh admin --eval "db.shutdownServer()" || true
 
 # Wait for MongoDB to stop
 while ps aux | grep -v grep | grep mongod > /dev/null; do
