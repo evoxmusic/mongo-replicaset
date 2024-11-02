@@ -20,46 +20,29 @@ RUN mkdir -p /data/mongodb && \
     chmod 400 /data/mongodb/keyfile
 
 # Create init script for replica set and root user
-RUN cat <<EOF > /docker-entrypoint-initdb.d/init-replica.sh
-#!/bin/bash
-# Start MongoDB without auth for initial setup
-mongod --replSet rs0 --bind_ip_all --keyFile /data/mongodb/keyfile &
-
-# Wait for MongoDB to start
-sleep 5
-
-# Initialize replica set
-mongosh --eval "rs.initiate({ _id: \"rs0\", members: [{ _id: 0, host: \"localhost:27017\" }]})"
-
-# Wait for replica set to initialize
-sleep 5
-
-# Create root user using build arguments
-mongosh --eval 'admin = db.getSiblingDB("admin"); admin.createUser({ user: "$MONGODB_USER", pwd: "$MONGODB_PASSWORD", roles: ["root"] })'
-
-# Stop MongoDB
-mongosh --eval "db.getSiblingDB('admin').shutdownServer()"
-
-# Wait for MongoDB to stop
-sleep 5
+RUN cat <<EOF > /docker-entrypoint-initdb.d/init-mongo.js
+admin = db.getSiblingDB("admin");
+admin.createUser({
+  user: "$MONGODB_USER",
+  pwd: "$MONGODB_PASSWORD",
+  roles: ["root"]
+});
 EOF
 
-# Create a custom entrypoint script
-RUN cat <<EOF > /custom-entrypoint.sh
+RUN cat <<EOF > /docker-entrypoint-initdb.d/init-replica.sh
 #!/bin/bash
-# Start MongoDB with authentication and keyfile
-exec mongod --replSet rs0 --auth --bind_ip_all --keyFile /data/mongodb/keyfile
+sleep 10
+mongosh --eval "rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:27017' }]})"
 EOF
 
 # Make scripts executable
 RUN chmod +x /docker-entrypoint-initdb.d/init-replica.sh
-RUN chmod +x /custom-entrypoint.sh
 
 # Set proper permissions
-RUN chown -R mongodb:mongodb /data/db /docker-entrypoint-initdb.d
+RUN chown -R mongodb:mongodb /data/db /docker-entrypoint-initdb.d /data/mongodb
 
 # Expose the default MongoDB port
 EXPOSE 27017
 
-# Set the custom entrypoint
-ENTRYPOINT ["/custom-entrypoint.sh"]
+# Use the official MongoDB entrypoint
+CMD ["mongod", "--replSet", "rs0", "--auth", "--keyFile", "/data/mongodb/keyfile", "--bind_ip_all"]
