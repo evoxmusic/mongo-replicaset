@@ -4,13 +4,7 @@ FROM mongo:6.0.19
 ARG MONGODB_USER
 ARG MONGODB_PASSWORD
 
-# Validate build arguments
-RUN if [ -z "$MONGODB_USER" ] || [ -z "$MONGODB_PASSWORD" ]; then \
-    echo "Error: MONGODB_USER and MONGODB_PASSWORD build arguments must be provided" && \
-    exit 1; \
-    fi
-
-# Create directory for mongodb data and scripts
+# Create directories
 RUN mkdir -p /data/db /docker-entrypoint-initdb.d
 
 # Generate keyfile for replica set authentication
@@ -19,67 +13,43 @@ RUN mkdir -p /data/mongodb && \
     chown mongodb:mongodb /data/mongodb/keyfile && \
     chmod 400 /data/mongodb/keyfile
 
-# Create initialization script
+# Create the init script
 RUN cat <<'EOF' > /docker-entrypoint-initdb.d/init.sh
 #!/bin/bash
-set -e
 
-# Start MongoDB without authentication for initial setup
-mongod --replSet rs0 --bind_ip_all --fork --logpath /var/log/mongodb.log
+mongod --bind_ip_all --replSet rs0 --keyFile /data/mongodb/keyfile &
+pid=$!
 
-# Wait for MongoDB to start
-until mongosh --eval "print('waiting...')" 2>/dev/null; do
-  sleep 1
-done
-
-echo "MongoDB started"
-
-# Initialize replica set if not already initialized
-mongosh --eval '
-if (rs.status().ok !== 1) {
-  rs.initiate({
-    _id: "rs0",
-    members: [{ _id: 0, host: "localhost:27017" }]
-  });
-}'
-
-# Wait for replica set to initialize
+echo "Waiting for MongoDB to start..."
 sleep 5
 
-# Create root user if it doesn't exist
-mongosh --eval '
-admin = db.getSiblingDB("admin");
-if (!admin.getUser("'$MONGODB_USER'")) {
-  admin.createUser({
+echo "Initializing replica set..."
+mongosh --eval 'rs.initiate({_id: "rs0", members: [{_id: 0, host: "localhost:27017"}]})'
+
+echo "Creating admin user..."
+mongosh admin --eval '
+  db.createUser({
     user: "'$MONGODB_USER'",
     pwd: "'$MONGODB_PASSWORD'",
     roles: ["root"]
-  });
-} else {
-  print("User already exists, skipping user creation");
-}'
+  })
+'
 
-# Stop MongoDB
-mongosh admin --eval "db.shutdownServer()" || true
+# Forward SIGTERM to the MongoDB process
+trap "kill -TERM $pid" SIGTERM
 
-# Wait for MongoDB to stop
-while ps aux | grep -v grep | grep mongod > /dev/null; do
-  sleep 1
-done
-
-echo "MongoDB stopped, ready for restart with authentication"
-
-# Start MongoDB with authentication
-exec mongod --replSet rs0 --auth --keyFile /data/mongodb/keyfile --bind_ip_all
+# Wait for MongoDB process
+wait $pid
 EOF
 
-# Make script executable
-RUN chmod +x /docker-entrypoint-initdb.d/init.sh
+# Make script executable and set permissions
+RUN chmod +x /docker-entrypoint-initdb.d/init.sh && \
+    chown -R mongodb:mongodb /data/db /docker-entrypoint-initdb.d /data/mongodb
 
-# Set proper permissions
-RUN chown -R mongodb:mongodb /data/db /docker-entrypoint-initdb.d /data/mongodb
+# Switch to mongodb user
+USER mongodb
 
-# Expose the default MongoDB port
+# Expose MongoDB port
 EXPOSE 27017
 
 # Set the entrypoint
